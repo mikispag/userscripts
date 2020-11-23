@@ -17,9 +17,12 @@ if (tld == "com") {
 
 var asinElement = document.getElementById("ASIN");
 if (!asinElement) {
-    throw new Error("Amazon CamelCamelCamel + Keepa Price Charts: unable to get ASIN!");
+    throw new Error("Amazon CamelCamelCamel + Keepa Price Charts: unable to find ASIN!");
 }
 var asin = asinElement.value;
+if (!asin) {
+    throw new Error("Amazon CamelCamelCamel + Keepa Price Charts: unable to get ASIN!");
+}
 
 var parentElement = document.getElementById("unifiedPrice_feature_div");
 if (!parentElement) {
