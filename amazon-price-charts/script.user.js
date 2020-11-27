@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name            Amazon CamelCamelCamel + Keepa Price Charts
-// @version         1.0.4
+// @version         1.0.5
 // @description     Add a CamelCamelCamel and Keepa price charts to Amazon product pages.
 // @author          miki.it
 // @namespace       null
@@ -9,22 +9,26 @@
 // @include         https://smile.amazon.*/*
 // ==/UserScript==
 
+function getASIN() {
+    var asinElement = document.getElementById("ASIN") || document.evaluate("//@data-asin", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+    if (!asinElement) {
+        throw new Error("Amazon CamelCamelCamel + Keepa Price Charts: unable to find ASIN!");
+    }
+    return asinElement.nodeValue;
+}
+
 var tld = document.domain.split(".").pop();
 var country = tld;
 if (tld == "com") {
     country = "us";
 }
 
-var asinElement = document.getElementById("ASIN");
-if (!asinElement) {
-    throw new Error("Amazon CamelCamelCamel + Keepa Price Charts: unable to find ASIN!");
-}
-var asin = asinElement.value;
+var asin = getASIN();
 if (!asin) {
     throw new Error("Amazon CamelCamelCamel + Keepa Price Charts: unable to get ASIN!");
 }
 
-var parentElement = document.getElementById("unifiedPrice_feature_div");
+var parentElement = document.getElementById("unifiedPrice_feature_div") || document.getElementById("MediaMatrix");
 if (!parentElement) {
     throw new Error("Amazon CamelCamelCamel + Keepa Price Charts: unable to get parent element!");
 }
