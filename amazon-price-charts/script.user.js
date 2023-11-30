@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name            Amazon CamelCamelCamel + Keepa Price Charts
-// @version         1.0.7
+// @version         1.0.8
 // @description     Add a CamelCamelCamel and Keepa price charts to Amazon product pages.
 // @author          miki.it
 // @namespace       null
 // @homepage        https://github.com/mikispag/userscripts/
 // @include         https://www.amazon.*/*
 // @include         https://smile.amazon.*/*
-// @run-at			document-end
+// @run-at          document-end
 // ==/UserScript==
 
 function getASIN() {
