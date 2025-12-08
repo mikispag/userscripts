@@ -316,9 +316,13 @@
     /**
      * Create chart element with loading/error states
      */
-    function createChartElement(title, linkUrl, imageUrl, altText) {
+    function createChartElement(title, linkUrl, imageUrl, altText, id, visible = true) {
         const wrapper = document.createElement('div');
         wrapper.className = 'chart-wrapper';
+        wrapper.setAttribute("id", id);
+        if (!visible){
+            wrapper.style.display = "none";
+        }
 
         const titleDiv = document.createElement('div');
         titleDiv.className = 'chart-title';
@@ -334,7 +338,9 @@
         const img = document.createElement('img');
         img.className = 'chart-img loading';
         img.alt = altText;
-        img.loading = 'lazy';
+        if (visible){
+            img.loading = 'lazy';
+        }
 
         const errorDiv = document.createElement('div');
         errorDiv.className = 'chart-error';
@@ -364,9 +370,9 @@
     /**
      * Main function to inject charts
      */
-    function injectCharts() {
+    function injectCharts(refresh = false) {
         // Prevent duplicate injection
-        if (document.getElementById(`${SCRIPT_ID}-container`)) {
+        if (!refresh && document.getElementById(`${SCRIPT_ID}-container`)) {
             log('Charts already injected');
             return;
         }
@@ -442,9 +448,25 @@
                 'CamelCamelCamel',
                 `https://${camelCountry}.camelcamelcamel.com/product/${asin}`,
                 `https://charts.camelcamelcamel.com/${camelCountry}/${asin}/amazon-new-used.png?force=1&zero=0&w=500&h=400&desired=false&legend=1&ilt=1&tp=all&fo=0`,
-                `CamelCamelCamel price history for ${asin}`
+                `CamelCamelCamel price history for ${asin}`,
+                "camelChart",
+                !refresh
             );
-            chartsContent.appendChild(camelChart);
+            if (!refresh)
+            {
+                chartsContent.appendChild(camelChart);
+            }
+            else
+            {
+                let currentChart = document.getElementById("camelChart");
+                currentChart.parentNode.append(camelChart);
+
+                setTimeout(() => {
+                    currentChart.style.display = "none";
+                    camelChart.style.display = "initial";
+                    currentChart.remove();
+                ;}, 500);
+            }
         }
 
         // Add Keepa chart
@@ -453,16 +475,36 @@
                 'Keepa',
                 `https://keepa.com/#!product/${keepaDomain}-${asin}`,
                 `https://graph.keepa.com/pricehistory.png?used=1&asin=${asin}&domain=${tld}`,
-                `Keepa price history for ${asin}`
+                `Keepa price history for ${asin}`,
+                "keepaChart",
+                !refresh
             );
-            chartsContent.appendChild(keepaChart);
+            if (!refresh)
+            {
+                chartsContent.appendChild(keepaChart);
+            }
+            else
+            {
+                let currentChart = document.getElementById("keepaChart");
+                currentChart.parentNode.append(keepaChart);
+
+                setTimeout(() => {
+                    currentChart.style.display = "none";
+                    keepaChart.style.display = "initial";
+                    currentChart.remove();
+                ;}, 500);
+            }
+
         }
 
         container.appendChild(toggle);
         container.appendChild(chartsContent);
 
-        // Insert at beginning of parent element
+        if (!refresh)
+        {
+            // Insert at beginning of parent element
         parentElement.insertBefore(container, parentElement.firstChild);
+        }
 
         log('Charts injected successfully');
     }
@@ -470,9 +512,9 @@
     /**
      * Initialize with retry logic for dynamic content
      */
-    function init() {
+    function init(refresh = false) {
         // Try immediately
-        injectCharts();
+        injectCharts(refresh);
 
         // If charts weren't injected, set up observer for dynamic content
         if (!document.getElementById(`${SCRIPT_ID}-container`) && isProductPage()) {
@@ -515,7 +557,7 @@
             lastUrl = location.href;
             log('URL changed, reinitializing');
             // Small delay to let page update
-            setTimeout(init, 500);
+            setTimeout(function(){init(true);}, 500);
         }
     });
 
