@@ -31,8 +31,6 @@ Works on all major Amazon locales (`.com`, `.co.uk`, `.de`, `.fr`, `.it`,
 - [Greasy Fork](https://greasyfork.org/en/scripts/416590-amazon-camelcamelcamel-keepa-price-charts) (recommended — automatic updates)
 - [Directly from this repository](https://github.com/mikispag/userscripts/raw/main/amazon-price-charts/script.user.js)
 
-![Screenshot of Amazon CamelCamelCamel + Keepa Price Charts](https://greasyfork.org/rails/active_storage/blobs/eyJfcmFpbHMiOnsibWVzc2FnZSI6IkJBaHBBb2hiIiwiZXhwIjpudWxsLCJwdXIiOiJibG9iX2lkIn19--06e802d0a190e026d49d4c083055adefdbaa705d/screen-small.png)
-
 ### Monerio + Rabattcorner + iGraal Cashback
 
 Surfaces cashback availability from [Monerio](https://monerio.ch/),
