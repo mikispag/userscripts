@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monerio + Rabattcorner + iGraal Cashback
 // @namespace    https://github.com/mikispag/userscripts/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Shows Monerio, Rabattcorner, and iGraal cashback on supported stores, with one-click affiliate activation links and coupon codes. Highlights the best offer when multiple providers cover the same shop.
 // @author       Michele Spagnuolo (miki.it)
 // @match        https://*/*
@@ -66,10 +66,14 @@
     pl: 'f9f4557825c74791ac01dc5c72ef7aef',
   };
   const IG_HOST = { fr: 'fr.igraal.com', de: 'de.igraal.com', es: 'es.igraal.com', pl: 'igraal.pl' };
+  // Per-locale account currency symbol for FIXED_NUMBER cashback amounts.
+  // iGraal accounts are denominated by country: EUR for fr/de/es, PLN for pl.
+  const IG_CURRENCY = { fr: '€', de: '€', es: '€', pl: 'zł' };
   // No CH/EN/IT locale in iGraal; map: de→de, everything else (fr/it/en/...)→fr (broadest catalog).
   const IG_COUNTRY = (LANG === 'de') ? 'de' : 'fr';
   const IG_CLIENT  = IG_CLIENTS[IG_COUNTRY];
   const IG_HOST_BASE = `https://${IG_HOST[IG_COUNTRY]}`;
+  const IG_CURRENCY_SYMBOL = IG_CURRENCY[IG_COUNTRY] || '€';
 
   // ====== Network ======
   const gmFetch = (url, opts = {}) => new Promise((resolve, reject) => {
@@ -466,7 +470,9 @@
       return offers.length > 1 ? `Up to ${top.cashbackDisplayText}` : top.cashbackDisplayText;
     }
     if (mc && mc.value != null) {
-      return mc.type === 'PERCENTAGE' ? `Up to ${mc.value}% cashback` : `Up to CHF ${mc.value} cashback`;
+      return mc.type === 'PERCENTAGE'
+        ? `Up to ${mc.value}% cashback`
+        : `Up to ${IG_CURRENCY_SYMBOL}${mc.value} cashback`;
     }
     return '';
   }
