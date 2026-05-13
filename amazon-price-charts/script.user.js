@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name            Amazon CamelCamelCamel + Keepa Price Charts
-// @version         2.0.0
+// @version         2.0.1
 // @description     Add CamelCamelCamel and Keepa price charts to Amazon product pages.
 // @author          Michele Spagnuolo (miki.it)
 // @namespace       https://github.com/mikispag/userscripts/
@@ -316,13 +316,10 @@
     /**
      * Create chart element with loading/error states
      */
-    function createChartElement(title, linkUrl, imageUrl, altText, id, visible = true) {
+    function createChartElement(title, linkUrl, imageUrl, altText, id) {
         const wrapper = document.createElement('div');
         wrapper.className = 'chart-wrapper';
-        wrapper.setAttribute("id", id);
-        if (!visible){
-            wrapper.style.display = "none";
-        }
+        wrapper.id = id;
 
         const titleDiv = document.createElement('div');
         titleDiv.className = 'chart-title';
@@ -338,9 +335,7 @@
         const img = document.createElement('img');
         img.className = 'chart-img loading';
         img.alt = altText;
-        if (visible){
-            img.loading = 'lazy';
-        }
+        img.loading = 'lazy';
 
         const errorDiv = document.createElement('div');
         errorDiv.className = 'chart-error';
@@ -371,10 +366,13 @@
      * Main function to inject charts
      */
     function injectCharts(refresh = false) {
-        // Prevent duplicate injection
-        if (!refresh && document.getElementById(`${SCRIPT_ID}-container`)) {
-            log('Charts already injected');
-            return;
+        const existingContainer = document.getElementById(`${SCRIPT_ID}-container`);
+        if (existingContainer) {
+            if (!refresh) {
+                log('Charts already injected');
+                return;
+            }
+            existingContainer.remove();
         }
 
         if (!isProductPage()) {
@@ -444,67 +442,30 @@
 
         // Add CamelCamelCamel chart
         if (camelCountry) {
-            const camelChart = createChartElement(
+            chartsContent.appendChild(createChartElement(
                 'CamelCamelCamel',
                 `https://${camelCountry}.camelcamelcamel.com/product/${asin}`,
                 `https://charts.camelcamelcamel.com/${camelCountry}/${asin}/amazon-new-used.png?force=1&zero=0&w=500&h=400&desired=false&legend=1&ilt=1&tp=all&fo=0`,
                 `CamelCamelCamel price history for ${asin}`,
-                "camelChart",
-                !refresh
-            );
-            if (!refresh)
-            {
-                chartsContent.appendChild(camelChart);
-            }
-            else
-            {
-                let currentChart = document.getElementById("camelChart");
-                currentChart.parentNode.append(camelChart);
-
-                setTimeout(() => {
-                    currentChart.style.display = "none";
-                    camelChart.style.display = "initial";
-                    currentChart.remove();
-                ;}, 500);
-            }
+                'camelChart'
+            ));
         }
 
         // Add Keepa chart
         if (keepaDomain) {
-            const keepaChart = createChartElement(
+            chartsContent.appendChild(createChartElement(
                 'Keepa',
                 `https://keepa.com/#!product/${keepaDomain}-${asin}`,
                 `https://graph.keepa.com/pricehistory.png?used=1&asin=${asin}&domain=${tld}`,
                 `Keepa price history for ${asin}`,
-                "keepaChart",
-                !refresh
-            );
-            if (!refresh)
-            {
-                chartsContent.appendChild(keepaChart);
-            }
-            else
-            {
-                let currentChart = document.getElementById("keepaChart");
-                currentChart.parentNode.append(keepaChart);
-
-                setTimeout(() => {
-                    currentChart.style.display = "none";
-                    keepaChart.style.display = "initial";
-                    currentChart.remove();
-                ;}, 500);
-            }
-
+                'keepaChart'
+            ));
         }
 
         container.appendChild(toggle);
         container.appendChild(chartsContent);
 
-        if (!refresh)
-        {
-            // Insert at beginning of parent element
         parentElement.insertBefore(container, parentElement.firstChild);
-        }
 
         log('Charts injected successfully');
     }
@@ -557,7 +518,7 @@
             lastUrl = location.href;
             log('URL changed, reinitializing');
             // Small delay to let page update
-            setTimeout(function(){init(true);}, 500);
+            setTimeout(() => init(true), 500);
         }
     });
 
