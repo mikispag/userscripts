@@ -16,21 +16,6 @@ these scripts:
 
 ## Scripts
 
-### Amazon CamelCamelCamel + Keepa Price Charts
-
-Embeds [CamelCamelCamel](https://camelcamelcamel.com/) and
-[Keepa](https://keepa.com/) historical price charts directly into Amazon
-product pages, so you can check the price history without leaving the page.
-
-Works on all major Amazon locales (`.com`, `.co.uk`, `.de`, `.fr`, `.it`,
-`.es`, `.ca`, `.co.jp`, `.in`, `.com.br`, `.com.mx`, `.com.au`, `.nl`, `.sg`,
-`.ae`, `.sa`, `.se`, `.pl`, `.com.tr`, `.eg`, `.com.be`).
-
-**Install:**
-
-- [Greasy Fork](https://greasyfork.org/en/scripts/416590-amazon-camelcamelcamel-keepa-price-charts) (recommended — automatic updates)
-- [Directly from this repository](https://github.com/mikispag/userscripts/raw/main/amazon-price-charts/script.user.js)
-
 ### Monerio + Rabattcorner + iGraal Cashback
 
 Surfaces cashback availability from [Monerio](https://monerio.ch/),
