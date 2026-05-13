@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monerio Cashback Banner
 // @namespace    https://monerio.ch/
-// @version      0.2.0
+// @version      0.2.1
 // @description  Shows a Monerio cashback banner on any supported store, with a one-click affiliate activation link and available coupon codes.
 // @author       Miki
 // @match        *://*/*
@@ -61,8 +61,15 @@
   function findStore(stores, hostname) {
     const host = hostname.toLowerCase();
     const stripped = host.replace(/^www\./, '');
-    const candidates = [host, stripped, 'www.' + stripped];
-    for (const c of candidates) if (stores[c]) return stores[c];
+    for (const k of [host, stripped, 'www.' + stripped]) if (stores[k]) return stores[k];
+    // Walk parent domains (e.g. ch.iherb.com -> iherb.com), but never to a TLD.
+    const parts = stripped.split('.');
+    while (parts.length > 2) {
+      parts.shift();
+      const parent = parts.join('.');
+      if (stores[parent]) return stores[parent];
+      if (stores['www.' + parent]) return stores['www.' + parent];
+    }
     return null;
   }
 
@@ -117,7 +124,7 @@
   function cashbackText(store) {
     const langs = store.cashback_string_langs || {};
     return (langs[LANG] || store.cashback_string || '')
-      .replace(/^\+\s*/, '')        // strip leading "+ "
+      .replace(/^\+\s*/, '')
       .replace(/\s*mit\s*$|\s*with\s*$|\s*avec\s*$|\s*con\s*$/i, '');
   }
 
@@ -125,7 +132,7 @@
     if (!store.cashback_was) return '';
     const [type, val] = String(store.cashback_was).split('|');
     if (!val) return '';
-    return type === 'percent' ? `${val}%` : `CHF ${val}`;
+    return type === 'percent' ? `${val}%` : `CHF ${val}`;
   }
 
   function outUrl(store) { return `${APP}/${LANG}/out/store/${store.id}`; }
