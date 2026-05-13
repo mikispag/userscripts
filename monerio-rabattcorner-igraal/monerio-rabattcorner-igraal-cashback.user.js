@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Monerio + Rabattcorner Cashback
+// @name         Monerio + Rabattcorner + iGraal Cashback
 // @namespace    https://monerio.ch/
-// @version      0.1.1
-// @description  Shows Monerio and/or Rabattcorner cashback on supported stores, with one-click affiliate activation links and coupon codes. Highlights the better offer when both providers cover the same shop.
+// @version      0.1.2
+// @description  Shows Monerio, Rabattcorner, and iGraal cashback on supported stores, with one-click affiliate activation links and coupon codes. Highlights the best offer when multiple providers cover the same shop.
 // @author       miki.it
 // @match        https://*/*
 // @run-at       document-idle
@@ -11,6 +11,7 @@
 // @grant        GM_getValue
 // @connect      api.monerio.ch
 // @connect      www.rabattcorner.ch
+// @connect      graphql-router-public-euc1.foundation.gsg.direct
 // @noframes
 // ==/UserScript==
 
@@ -23,14 +24,20 @@
     const code = (navigator.language || 'en').slice(0, 2).toLowerCase();
     return SUPPORTED_LANGS.includes(code) ? code : 'en';
   })();
-  const EXCLUDED_HOST = /(^|\.)(monerio\.ch|rabattcorner\.ch|twitter\.com|x\.com|whatsapp\.com|google\.[a-z.]+)$/i;
+  const EXCLUDED_HOST = /(^|\.)(monerio\.ch|rabattcorner\.ch|igraal\.com|igraal\.pl|twitter\.com|x\.com|whatsapp\.com|google\.[a-z.]+)$/i;
   const STORES_TTL_MS      = 6  * 60 * 60 * 1000;
   const COUPONS_TTL_MS     = 24 * 60 * 60 * 1000;
   const EXSETTINGS_TTL_MS  = 24 * 60 * 60 * 1000;
   const HIDE_TTL_MS        = 24 * 60 * 60 * 1000;
+  // iGraal does host->retailer lookups via per-page GraphQL calls, so caching is
+  // a privacy lever as well as a perf one. The retailer↔domain mapping basically
+  // never changes; catalog growth is slow (~tens of retailers/month). Use long TTLs.
+  const IG_MATCH_POS_TTL_MS = 14 * 24 * 60 * 60 * 1000;   // 14 days for known retailers
+  const IG_MATCH_NEG_TTL_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days for hosts not on iGraal
 
   const MN = { id: 'monerio',      label: 'Monerio',      color: '#0a7d2c' };
   const RC = { id: 'rabattcorner', label: 'Rabattcorner', color: '#e6007e' };
+  const IG = { id: 'igraal',       label: 'iGraal',       color: '#5b21b6' };
 
   // ====== Monerio config ======
   const MN_API = 'https://api.monerio.ch';
@@ -42,6 +49,27 @@
 
   // ====== Rabattcorner config ======
   const RC_API = 'https://www.rabattcorner.ch';
+
+  // ====== iGraal config ======
+  // GraphQL Federation gateway shared with other Global Savings Group properties.
+  // The extension hits this from every page; we mirror that with per-host caching.
+  // PRIVACY: each unique host visit sends a GraphQL request to iGraal (same as their
+  // official extension). Negative results are cached for 24h so the request is
+  // amortized.
+  const IG_GQL = 'https://graphql-router-public-euc1.foundation.gsg.direct/';
+  // Per-locale Apollo clientId + image/landing host. Pulled verbatim from the
+  // browser extension bundle (background.bundle.js, `gql:{de:{clientId:...}}`).
+  const IG_CLIENTS = {
+    fr: 'a444a51901d85f3d9eb84ada70cef7f3',
+    de: 'c235ee8b371f4e8b8e392330ea359875',
+    es: 'ff880fb8a999463b9a7c952eeac263ca',
+    pl: 'f9f4557825c74791ac01dc5c72ef7aef',
+  };
+  const IG_HOST = { fr: 'fr.igraal.com', de: 'de.igraal.com', es: 'es.igraal.com', pl: 'igraal.pl' };
+  // No CH/EN/IT locale in iGraal; map: de→de, everything else (fr/it/en/...)→fr (broadest catalog).
+  const IG_COUNTRY = (LANG === 'de') ? 'de' : 'fr';
+  const IG_CLIENT  = IG_CLIENTS[IG_COUNTRY];
+  const IG_HOST_BASE = `https://${IG_HOST[IG_COUNTRY]}`;
 
   // ====== Network ======
   const gmFetch = (url, opts = {}) => new Promise((resolve, reject) => {
@@ -82,6 +110,24 @@
     } catch { return ''; }
   }
 
+  // eTLD+1 extraction with a small allowlist for two-part suffixes. Matches what
+  // iGraal's extension does (PSL-based eTLD+1), so we send the same number of
+  // GraphQL requests per page as the extension instead of fan-out parent-walking.
+  const TWO_PART_SUFFIXES = new Set([
+    'co.uk','co.jp','co.nz','co.in','co.za','co.kr','co.il',
+    'com.au','com.br','com.mx','com.cn','com.tr','com.ar','com.sg','com.hk','com.tw',
+    'org.uk','gov.uk','ac.uk','me.uk','net.uk',
+    'ne.jp','or.jp','ac.jp',
+  ]);
+  function registrableDomain(hostname) {
+    const stripped = stripWwwLike(hostname);
+    const parts = stripped.split('.');
+    if (parts.length <= 2) return stripped;
+    const last2 = parts.slice(-2).join('.');
+    if (TWO_PART_SUFFIXES.has(last2)) return parts.slice(-3).join('.');
+    return parts.slice(-2).join('.');
+  }
+
   // ====== Monerio: stores ======
   function normalizeMnStores(raw) {
     const out = {};
@@ -95,7 +141,6 @@
   async function loadMnStores() {
     const raw = GM_getValue('monerio_stores', null);
     const cached = raw ? JSON.parse(raw) : null;
-    // Cached map is already normalized on write; skip re-normalization to save ~10ms/load.
     if (cached && Date.now() - cached.t < STORES_TTL_MS) return cached.d;
     const r = await gmFetch(`${MN_API}/public/exStores?locale=${LANG}`);
     if (r && r.success && r.data) {
@@ -142,9 +187,7 @@
     const s = await loadMnExSettings();
     const params = String(s.aff_link_params || '').split(',').map(x => x.trim()).filter(Boolean);
     if (!params.length) return false;
-    // Name-equality match, NOT substring: the extension's substring check produces
-    // false positives on every UTM-tagged URL (?utm_campaign=...). We diverge from
-    // the extension on purpose here.
+    // Name-equality, NOT substring (the extension does substring → false positives on every ?utm_*).
     const qp = new URLSearchParams(location.search);
     return params.some(p => qp.has(p));
   }
@@ -188,9 +231,7 @@
     for (const pid of Object.keys(raw)) {
       const p = raw[pid] || {};
       const dom = stripWwwLike(normalizeDomain(p.websiteUrl));
-      // Skip catalog placeholders like "kein ADDON gewünscht" (German "no addon
-      // wanted" — partners without tracking). Any value with a space or no dot
-      // can never match a real hostname.
+      // Skip catalog placeholders like "kein ADDON gewünscht" (no-tracking partners).
       if (!dom || dom.indexOf(' ') >= 0 || dom.indexOf('.') < 0) continue;
       list.push(Object.assign({}, p, { partner_id: pid, websiteUrl: dom }));
     }
@@ -211,10 +252,9 @@
   }
 
   function findRcPartner(partners, hostname) {
-    // Both sides normalized with the same www-like stripper (mirrors RC extension).
     const host = stripWwwLike(hostname);
     for (const p of partners) {
-      const w = p.websiteUrl;  // already stripped during normalization
+      const w = p.websiteUrl;
       if (host === w || host.endsWith('.' + w)) return p;
     }
     return null;
@@ -259,17 +299,217 @@
     return null;
   }
 
-  // ====== Rate comparison ======
-  // Returns 'a', 'b', or null.
-  // null cases: either side missing, units mismatch (percent vs CHF — incomparable
-  // without basket size), or values are equal (a tie — show both cards without a
-  // "Best deal" badge rather than picking arbitrarily).
-  function compareRates(a, b) {
-    if (!a || !b) return null;
-    if (a.kind !== b.kind) return null;
-    if (a.value > b.value) return 'a';
-    if (b.value > a.value) return 'b';
+  // ====== iGraal: GraphQL ======
+  const IG_Q_RETAILERS = `
+    query RetailersByFilter($input: SearchRetailersInput) {
+      retailersByFilter(input: $input) {
+        retailers {
+          data {
+            retailer {
+              country merchantUrl name idPool isPublished isShownInExtension
+              logo logoBackgroundColor qualityPos
+            }
+          }
+        }
+      }
+    }`;
+  const IG_Q_CASHBACK = `
+    query ActiveCashbackWithMaxCommission($criteria: CashbackRetailerPoolIdInput) {
+      activeCashbackWithMaxCommission(criteria: $criteria) {
+        data {
+          retailer {
+            name idPool
+            activeCashback {
+              data {
+                maxCommission { type value }
+                offers { cashbackDisplayText outgoingAmount { type value } }
+              }
+            }
+            landingPage { url }
+          }
+        }
+      }
+    }`;
+  const IG_Q_OFFERS = `
+    query offersByFilter($input: SearchOffersInput) {
+      offersByFilter(input: $input) {
+        offers {
+          data {
+            voucher {
+              code caption1 description title termsAndConditions
+              endTime startTime voucherTypeName country
+            }
+          }
+        }
+      }
+    }`;
+
+  async function igGql(query, variables) {
+    const r = await gmFetch(IG_GQL, {
+      method: 'POST',
+      headers: { 'apollographql-client-name': 'browser-extension' },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (r && Array.isArray(r.errors) && r.errors.length) {
+      throw new Error(r.errors[0].message || 'GraphQL error');
+    }
+    return r && r.data;
+  }
+
+  async function igLookupByUrl(url) {
+    const data = await igGql(IG_Q_RETAILERS, {
+      input: {
+        country: IG_COUNTRY,
+        filter: { url, published: true },
+        idClient: IG_CLIENT,
+        page: 1,
+        size: 50,   // extension uses 100; 50 is plenty headroom for single-domain queries
+      },
+    });
+    const hits = (data && data.retailersByFilter && data.retailersByFilter.retailers
+                 && data.retailersByFilter.retailers.data) || [];
+    // Collect all verified hits, then prefer the one whose country matches the
+    // chosen IG_COUNTRY (e.g. multiple regional L'Occitane retailers: pick FR over BE).
+    const verified = [];
+    for (const h of hits) {
+      const r = h.retailer;
+      if (!r || !r.isPublished || !r.isShownInExtension) continue;
+      let mHost = '';
+      try { mHost = stripWwwLike(new URL(r.merchantUrl).hostname); }
+      catch { mHost = stripWwwLike(String(r.merchantUrl || '')); }
+      if (mHost === url || mHost.endsWith('.' + url) || url.endsWith('.' + mHost)) verified.push(r);
+    }
+    if (!verified.length) return null;
+    // Prefer retailer in IG_COUNTRY, then lowest qualityPos (iGraal's editorial
+    // ranking; lower = more prominent). Handles e.g. loccitane.com returning
+    // both be.loccitane.com and fr.loccitane.com from the FR catalog.
+    verified.sort((a, b) => {
+      const ac = a.country === IG_COUNTRY ? 0 : 1;
+      const bc = b.country === IG_COUNTRY ? 0 : 1;
+      if (ac !== bc) return ac - bc;
+      return (a.qualityPos ?? 9999) - (b.qualityPos ?? 9999);
+    });
+    return verified[0];
+  }
+
+  async function findIgRetailer(hostname) {
+    // Query the eTLD+1 once (matching the extension), not host/parents one by one.
+    // The strict post-filter inside igLookupByUrl rejects unrelated server hits.
+    const lookupHost = registrableDomain(hostname);
+    const cacheKey = `igraal_match_${IG_COUNTRY}_${lookupHost}`;
+    const raw = GM_getValue(cacheKey, null);
+    const cached = raw ? JSON.parse(raw) : null;
+    if (cached) {
+      const ttl = cached.r ? IG_MATCH_POS_TTL_MS : IG_MATCH_NEG_TTL_MS;
+      if (Date.now() - cached.t < ttl) return cached.r;
+    }
+    const found = await igLookupByUrl(lookupHost);
+    GM_setValue(cacheKey, JSON.stringify({ t: Date.now(), r: found }));
+    return found;
+  }
+
+  async function fetchIgCashback(retailer) {
+    const cacheKey = `igraal_cb_${IG_COUNTRY}_${retailer.idPool}`;
+    const raw = GM_getValue(cacheKey, null);
+    const cached = raw ? JSON.parse(raw) : null;
+    if (cached && Date.now() - cached.t < COUPONS_TTL_MS) return cached.d;
+    const data = await igGql(IG_Q_CASHBACK, { criteria: { idClient: IG_CLIENT, idPool: retailer.idPool } });
+    const result = (data && data.activeCashbackWithMaxCommission && data.activeCashbackWithMaxCommission.data) || null;
+    GM_setValue(cacheKey, JSON.stringify({ t: Date.now(), d: result }));
+    return result;
+  }
+
+  // Client-side validity filter mirroring the extension's isValidVoucher.
+  // Drops expired offers and Code-type vouchers whose code contains whitespace
+  // (server-side data bug that occasionally leaks past voucherSubset:'ACTIVE').
+  function isValidIgVoucher(v) {
+    if (!v) return false;
+    const now = Date.now();
+    if (v.startTime && new Date(v.startTime).getTime() > now) return false;
+    if (v.endTime   && new Date(v.endTime).getTime()   < now) return false;
+    if (v.code && /\s/.test(v.code)) return false;
+    return true;
+  }
+
+  async function fetchIgCoupons(retailer) {
+    const cacheKey = `igraal_offers_${IG_COUNTRY}_${retailer.idPool}`;
+    const raw = GM_getValue(cacheKey, null);
+    const cached = raw ? JSON.parse(raw) : null;
+    if (cached && Date.now() - cached.t < COUPONS_TTL_MS) return cached.d;
+    try {
+      const data = await igGql(IG_Q_OFFERS, {
+        input: {
+          country: IG_COUNTRY,
+          filter: { idRetailer: retailer.idPool, published: true, voucherSubset: 'ACTIVE' },
+          idClient: IG_CLIENT,
+          page: 1,
+          size: 50,
+          sort: [{ direction: 'desc', field: 'amountScore' }],
+        },
+      });
+      const data2 = data && data.offersByFilter && data.offersByFilter.offers && data.offersByFilter.offers.data;
+      const coupons = (data2 || []).map(o => o.voucher).filter(isValidIgVoucher);
+      GM_setValue(cacheKey, JSON.stringify({ t: Date.now(), d: coupons }));
+      return coupons;
+    } catch (_) { return []; }
+  }
+
+  function igCashbackText(cb) {
+    const data = cb && cb.retailer && cb.retailer.activeCashback && cb.retailer.activeCashback.data;
+    if (!data) return '';
+    const offers = data.offers || [];
+    const mc = data.maxCommission;
+    const top = mc ? offers.find(o => o.outgoingAmount &&
+                                      o.outgoingAmount.value === mc.value &&
+                                      o.outgoingAmount.type === mc.type) : null;
+    if (top && top.cashbackDisplayText) {
+      return offers.length > 1 ? `Up to ${top.cashbackDisplayText}` : top.cashbackDisplayText;
+    }
+    if (mc && mc.value != null) {
+      return mc.type === 'PERCENTAGE' ? `Up to ${mc.value}% cashback` : `Up to CHF ${mc.value} cashback`;
+    }
+    return '';
+  }
+
+  function igLogoUrl(retailer) {
+    const p = retailer && retailer.logo;
+    if (!p) return '';
+    const path = p.startsWith('/') ? p : '/' + p;
+    return `${IG_HOST_BASE}/images/180x${path}`;
+  }
+
+  function igOutUrl(cb) {
+    const lp = cb && cb.retailer && cb.retailer.landingPage && cb.retailer.landingPage.url;
+    if (!lp) return IG_HOST_BASE;
+    if (/^https?:\/\//i.test(lp)) return lp;
+    return `${IG_HOST_BASE}/${lp.replace(/^\//, '')}`;
+  }
+
+  function parseIgRate(cb) {
+    const mc = cb && cb.retailer && cb.retailer.activeCashback
+            && cb.retailer.activeCashback.data && cb.retailer.activeCashback.data.maxCommission;
+    if (!mc) return null;
+    const v = parseFloat(mc.value);
+    if (!isFinite(v) || v <= 0) return null;
+    if (mc.type === 'PERCENTAGE')   return { kind: 'percent', value: v };
+    if (mc.type === 'FIXED_NUMBER') return { kind: 'fixed',   value: v };
     return null;
+  }
+
+  // ====== Best-offer picking ======
+  // Returns the single match object with the strictly-highest rate across all
+  // provided matches. Returns null when:
+  //   - Fewer than 2 rated matches (nothing to compare).
+  //   - Rate units mismatch (percent vs CHF — incomparable without basket size).
+  //   - Multiple matches share the top value (a tie — show all without a "Best" badge).
+  function pickBestMatch(matches) {
+    const rated = matches.filter(m => m.rate);
+    if (rated.length < 2) return null;
+    const kinds = new Set(rated.map(m => m.rate.kind));
+    if (kinds.size > 1) return null;
+    const maxV = Math.max(...rated.map(m => m.rate.value));
+    const top = rated.filter(m => m.rate.value === maxV);
+    return top.length === 1 ? top[0] : null;
   }
 
   // ====== Rendering ======
@@ -352,7 +592,7 @@
       <button class="mn-x" title="Hide for today" aria-label="Close">×</button>
       <div class="mn-chips">
         <span class="mn-chip" style="background:${spec.provider.color}">${escapeHtml(spec.provider.label)}</span>
-        ${spec.isBest ? `<span class="mn-chip mn-best-chip" title="Higher cashback than the other provider">★ Best deal</span>` : ''}
+        ${spec.isBest ? `<span class="mn-chip mn-best-chip" title="Highest cashback among matching providers">★ Best deal</span>` : ''}
       </div>
       <div class="mn-row">
         ${logo ? `<img class="mn-logo" src="${escapeAttr(logo)}" alt="">` : ''}
@@ -444,10 +684,6 @@
   }
 
   // ====== Provider runners ======
-  // Each returns one of:
-  //   { kind: 'match', provider, spec, rate }
-  //   { kind: 'none' }
-  //   { kind: 'error', provider, message }
   async function runMonerio() {
     try {
       const stores = await loadMnStores();
@@ -511,6 +747,44 @@
     }
   }
 
+  async function runIgraal() {
+    try {
+      const retailer = await findIgRetailer(location.hostname);
+      if (!retailer) return { kind: 'none' };
+      const hideKey = 'ig_hide_' + retailer.idPool;
+      const hiddenAt = Number(GM_getValue(hideKey, 0));
+      if (hiddenAt && Date.now() - hiddenAt < HIDE_TTL_MS) return { kind: 'none' };
+      const cb = await fetchIgCashback(retailer).catch(() => null);
+      // Bail when no active campaign. iGraal returns `cb.retailer` with
+      // `activeCashback.data === null` between campaigns; the extension throws
+      // "No cashback available" in exactly this case. Without this check, the
+      // banner would render with empty cashbackText and a broken activate link.
+      if (!cb || !cb.retailer || !cb.retailer.activeCashback || !cb.retailer.activeCashback.data) {
+        return { kind: 'none' };
+      }
+      const coupons = await fetchIgCoupons(retailer).catch(() => []);
+      return {
+        kind: 'match',
+        provider: IG,
+        rate: parseIgRate(cb),
+        spec: {
+          provider: IG,
+          name: (cb.retailer && cb.retailer.name) || retailer.name,
+          logo: igLogoUrl(retailer),
+          cashbackText: igCashbackText(cb),
+          outUrl: igOutUrl(cb),
+          coupons,
+          alreadyActivated: false,
+          hideKey,
+          // iGraal voucher field names match the {title, description, code} convention.
+          couponMap: { title: 'title', description: 'description', code: 'code' },
+        },
+      };
+    } catch (e) {
+      return { kind: 'error', provider: IG, message: (e && e.message) || String(e) };
+    }
+  }
+
   // ====== Orchestration ======
   // Monotonic run token: prevents a slow first evaluate() from overwriting a
   // fresh one's render after the user navigated (SPA) to another host mid-await.
@@ -524,38 +798,29 @@
       return;
     }
 
-    const [mn, rc] = await Promise.all([runMonerio(), runRabattcorner()]);
+    const results = await Promise.all([runMonerio(), runRabattcorner(), runIgraal()]);
     if (myRun !== runId) return;  // a newer evaluate() has started; abandon this one
 
-    // Clear any prior banners before re-rendering.
     const existing = document.getElementById('mn-stack');
     if (existing) existing.innerHTML = '';
 
-    const mnMatch = mn.kind === 'match' ? mn : null;
-    const rcMatch = rc.kind === 'match' ? rc : null;
-    const winner = (mnMatch && rcMatch) ? compareRates(mnMatch.rate, rcMatch.rate) : null;
+    const matches = results.filter(r => r.kind === 'match');
+    const errors  = results.filter(r => r.kind === 'error');
 
-    if (mnMatch) mnMatch.spec.isBest = winner === 'a';
-    if (rcMatch) rcMatch.spec.isBest = winner === 'b';
+    const best = pickBestMatch(matches);
+    for (const m of matches) m.spec.isBest = (m === best);
 
-    // Order: winning match first, then the other match, then any errors.
+    // Order: best first; other matches in stable provider order; errors last.
     const order = [];
-    if (winner === 'b') {
-      if (rcMatch) order.push(rcMatch);
-      if (mnMatch) order.push(mnMatch);
-    } else {
-      if (mnMatch) order.push(mnMatch);
-      if (rcMatch) order.push(rcMatch);
-    }
-    if (mn.kind === 'error') order.push(mn);
-    if (rc.kind === 'error') order.push(rc);
+    if (best) order.push(best);
+    for (const m of matches) if (m !== best) order.push(m);
+    for (const e of errors) order.push(e);
 
     for (const r of order) {
       if (r.kind === 'match') renderMatch(r.spec);
       else if (r.kind === 'error') renderError(r.provider, r.message);
     }
 
-    // If nothing got rendered, drop the empty stack so the page stays clean.
     if (existing && !existing.children.length) existing.remove();
   }
 
