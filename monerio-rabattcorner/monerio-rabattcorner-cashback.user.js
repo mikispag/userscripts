@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Monerio + Rabattcorner Cashback
 // @namespace    https://monerio.ch/
-// @version      0.1.0
+// @version      0.1.1
 // @description  Shows Monerio and/or Rabattcorner cashback on supported stores, with one-click affiliate activation links and coupon codes. Highlights the better offer when both providers cover the same shop.
-// @author       Miki
-// @match        *://*/*
+// @author       miki.it
+// @match        https://*/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -60,13 +60,26 @@
     });
   });
 
-  // ====== Domain helpers ======
+  // ====== Domain / URL helpers ======
+  // Mirrors Rabattcorner's own normalizer: strips common load-balancer prefixes.
+  const STRIP_WWW_LIKE = /^(www|www1|www2|ww11|ww30)\./i;
+  function stripWwwLike(s) { return String(s || '').toLowerCase().trim().replace(STRIP_WWW_LIKE, ''); }
+
   function normalizeDomain(key) {
     let s = String(key || '').toLowerCase().trim();
     s = s.replace(/^https?:\/\//, '');
     const slash = s.indexOf('/');
     if (slash >= 0) s = s.slice(0, slash);
     return s;
+  }
+
+  // Block non-http(s) URLs (defensive: catalog feeds are third-party JSON).
+  function safeUrl(s) {
+    if (!s) return '';
+    try {
+      const u = new URL(s, location.href);
+      return /^https?:$/.test(u.protocol) ? u.href : '';
+    } catch { return ''; }
   }
 
   // ====== Monerio: stores ======
@@ -82,7 +95,8 @@
   async function loadMnStores() {
     const raw = GM_getValue('monerio_stores', null);
     const cached = raw ? JSON.parse(raw) : null;
-    if (cached && Date.now() - cached.t < STORES_TTL_MS) return normalizeMnStores(cached.d);
+    // Cached map is already normalized on write; skip re-normalization to save ~10ms/load.
+    if (cached && Date.now() - cached.t < STORES_TTL_MS) return cached.d;
     const r = await gmFetch(`${MN_API}/public/exStores?locale=${LANG}`);
     if (r && r.success && r.data) {
       const normalized = normalizeMnStores(r.data);
@@ -128,8 +142,11 @@
     const s = await loadMnExSettings();
     const params = String(s.aff_link_params || '').split(',').map(x => x.trim()).filter(Boolean);
     if (!params.length) return false;
-    const qs = location.search;
-    return params.some(p => qs.includes(p));
+    // Name-equality match, NOT substring: the extension's substring check produces
+    // false positives on every UTM-tagged URL (?utm_campaign=...). We diverge from
+    // the extension on purpose here.
+    const qp = new URLSearchParams(location.search);
+    return params.some(p => qp.has(p));
   }
 
   async function fetchMnCoupons(storeId) {
@@ -153,6 +170,7 @@
       .replace(/\s*mit\s*$|\s*with\s*$|\s*avec\s*$|\s*con\s*$/i, '');
   }
 
+  // Locale-less path verified against production: /de|en|fr|it/out/store/{id} all return 404.
   function mnOutUrl(store) { return `${MN_APP}/out/store/${store.id}`; }
 
   function parseMnRate(store) {
@@ -169,8 +187,11 @@
     const list = [];
     for (const pid of Object.keys(raw)) {
       const p = raw[pid] || {};
-      const dom = normalizeDomain(p.websiteUrl);
-      if (!dom) continue;
+      const dom = stripWwwLike(normalizeDomain(p.websiteUrl));
+      // Skip catalog placeholders like "kein ADDON gewünscht" (German "no addon
+      // wanted" — partners without tracking). Any value with a space or no dot
+      // can never match a real hostname.
+      if (!dom || dom.indexOf(' ') >= 0 || dom.indexOf('.') < 0) continue;
       list.push(Object.assign({}, p, { partner_id: pid, websiteUrl: dom }));
     }
     return list;
@@ -190,13 +211,11 @@
   }
 
   function findRcPartner(partners, hostname) {
-    const host = hostname.toLowerCase();
-    const stripped = host.replace(/^www\./, '');
+    // Both sides normalized with the same www-like stripper (mirrors RC extension).
+    const host = stripWwwLike(hostname);
     for (const p of partners) {
-      const w = p.websiteUrl;
-      const wStripped = w.replace(/^www\./, '');
-      if (host === w || stripped === wStripped) return p;
-      if (host.endsWith('.' + w) || stripped.endsWith('.' + wStripped)) return p;
+      const w = p.websiteUrl;  // already stripped during normalization
+      if (host === w || host.endsWith('.' + w)) return p;
     }
     return null;
   }
@@ -220,6 +239,10 @@
     return `${prefix}${rate} cashback`;
   }
 
+  // NOTE: With multiplerates, partner.comission is the *headline* (highest) rate. The
+  // best-deal comparison uses this headline rate by design; if both providers list
+  // tiered rates, the comparison favors whichever advertises a higher ceiling.
+
   function rcOutUrl(partner) {
     if (!partner.rcTrackingUrl) return RC_API;
     return RC_API + partner.rcTrackingUrl;
@@ -237,7 +260,10 @@
   }
 
   // ====== Rate comparison ======
-  // Returns 'a', 'b', or null (when units mismatch or values equal).
+  // Returns 'a', 'b', or null.
+  // null cases: either side missing, units mismatch (percent vs CHF — incomparable
+  // without basket size), or values are equal (a tie — show both cards without a
+  // "Best deal" badge rather than picking arbitrarily).
   function compareRates(a, b) {
     if (!a || !b) return null;
     if (a.kind !== b.kind) return null;
@@ -320,6 +346,8 @@
     const el = document.createElement('div');
     el.className = 'mn-card' + (spec.isBest ? ' mn-best' : '');
     el.dataset.provider = spec.provider.id;
+    const logo = safeUrl(spec.logo);
+    const out  = safeUrl(spec.outUrl);
     el.innerHTML = `
       <button class="mn-x" title="Hide for today" aria-label="Close">×</button>
       <div class="mn-chips">
@@ -327,7 +355,7 @@
         ${spec.isBest ? `<span class="mn-chip mn-best-chip" title="Higher cashback than the other provider">★ Best deal</span>` : ''}
       </div>
       <div class="mn-row">
-        ${spec.logo ? `<img class="mn-logo" src="${escapeAttr(spec.logo)}" alt="">` : ''}
+        ${logo ? `<img class="mn-logo" src="${escapeAttr(logo)}" alt="">` : ''}
         <div>
           <div class="mn-title">${escapeHtml(spec.name)}</div>
           <div class="mn-sub">Cashback available</div>
@@ -336,7 +364,7 @@
       <div class="mn-cb" style="color:${spec.provider.color}">${escapeHtml(spec.cashbackText)}</div>
       ${spec.alreadyActivated
         ? `<div class="mn-note">✓ Already on an affiliate link &mdash; cashback should track.</div>`
-        : `<a class="mn-btn" style="background:${spec.provider.color}" href="${escapeAttr(spec.outUrl)}" target="_blank" rel="noopener">Activate cashback</a>`}
+        : (out ? `<a class="mn-btn" style="background:${spec.provider.color}" href="${escapeAttr(out)}" target="_blank" rel="noopener">Activate cashback</a>` : '')}
       ${spec.coupons.length ? `<button class="mn-toggle" style="color:${spec.provider.color}">Show ${spec.coupons.length} coupon${spec.coupons.length > 1 ? 's' : ''}</button>` : ''}
       <div class="mn-cp"></div>
     `;
@@ -368,11 +396,20 @@
           }).join('');
           list.querySelectorAll('.mn-code').forEach(s => {
             s.addEventListener('click', () => {
-              navigator.clipboard.writeText(s.dataset.code).then(() => {
+              const txt = s.dataset.code;
+              const p = (navigator.clipboard && navigator.clipboard.writeText)
+                ? navigator.clipboard.writeText(txt)
+                : Promise.reject(new Error('clipboard unavailable'));
+              p.then(() => {
                 s.classList.add('copied');
                 const orig = s.textContent;
                 s.textContent = 'Copied!';
                 setTimeout(() => { s.classList.remove('copied'); s.textContent = orig; }, 1200);
+              }).catch(() => {
+                s.classList.add('copied');
+                const orig = s.textContent;
+                s.textContent = 'Copy failed';
+                setTimeout(() => { s.classList.remove('copied'); s.textContent = orig; }, 1500);
               });
             });
           });
@@ -475,7 +512,12 @@
   }
 
   // ====== Orchestration ======
+  // Monotonic run token: prevents a slow first evaluate() from overwriting a
+  // fresh one's render after the user navigated (SPA) to another host mid-await.
+  let runId = 0;
+
   async function evaluate() {
+    const myRun = ++runId;
     if (EXCLUDED_HOST.test(location.hostname)) {
       const stack = document.getElementById('mn-stack');
       if (stack) stack.remove();
@@ -483,6 +525,7 @@
     }
 
     const [mn, rc] = await Promise.all([runMonerio(), runRabattcorner()]);
+    if (myRun !== runId) return;  // a newer evaluate() has started; abandon this one
 
     // Clear any prior banners before re-rendering.
     const existing = document.getElementById('mn-stack');
