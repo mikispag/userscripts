@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monerio Cashback Banner
 // @namespace    https://monerio.ch/
-// @version      0.2.1
+// @version      0.2.3
 // @description  Shows a Monerio cashback banner on any supported store, with a one-click affiliate activation link and available coupon codes.
 // @author       Miki
 // @match        *://*/*
@@ -9,9 +9,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @grant        GM_cookie
 // @connect      api.monerio.ch
-// @connect      monerio.ch
 // @noframes
 // ==/UserScript==
 
@@ -26,6 +24,11 @@
     return SUPPORTED_LANGS.includes(code) ? code : 'en';
   })();
   const EXCLUDED_HOST = /(^|\.)(monerio\.ch|twitter\.com|x\.com|whatsapp\.com|google\.[a-z.]+)$/i;
+  // Catalog entries with wrong/placeholder keys: map real domain -> catalog key.
+  const DOMAIN_OVERRIDES = {
+    'swiss.com':  'artefact.com',  // SWISS International Air Lines (placeholder key in catalog)
+    'mcafee.com': 'macafee.com',   // McAfee (typo in catalog key)
+  };
   const STORES_TTL_MS      = 6  * 60 * 60 * 1000;
   const COUPONS_TTL_MS     = 24 * 60 * 60 * 1000;
   const EXSETTINGS_TTL_MS  = 24 * 60 * 60 * 1000;
@@ -46,21 +49,44 @@
     });
   });
 
+  function normalizeStoreKey(key) {
+    let s = String(key).toLowerCase().trim();
+    s = s.replace(/^https?:\/\//, '');
+    const slash = s.indexOf('/');
+    if (slash >= 0) s = s.slice(0, slash);
+    return s;
+  }
+
+  function normalizeStores(raw) {
+    const out = {};
+    for (const k of Object.keys(raw)) {
+      const nk = normalizeStoreKey(k);
+      if (!out[nk]) out[nk] = raw[k];
+    }
+    return out;
+  }
+
   async function loadStores() {
     const raw = GM_getValue('monerio_stores', null);
     const cached = raw ? JSON.parse(raw) : null;
-    if (cached && Date.now() - cached.t < STORES_TTL_MS) return cached.d;
+    if (cached && Date.now() - cached.t < STORES_TTL_MS) return normalizeStores(cached.d);
     const r = await gmFetch(`${API}/public/exStores?locale=${LANG}`);
     if (r && r.success && r.data) {
-      GM_setValue('monerio_stores', JSON.stringify({ t: Date.now(), d: r.data }));
-      return r.data;
+      const normalized = normalizeStores(r.data);
+      GM_setValue('monerio_stores', JSON.stringify({ t: Date.now(), d: normalized }));
+      return normalized;
     }
-    return (cached && cached.d) || {};
+    return (cached && normalizeStores(cached.d)) || {};
   }
 
   function findStore(stores, hostname) {
     const host = hostname.toLowerCase();
     const stripped = host.replace(/^www\./, '');
+    // Hand-curated overrides for known mis-keyed catalog entries.
+    for (const k of [host, stripped]) {
+      const target = DOMAIN_OVERRIDES[k];
+      if (target && stores[target]) return stores[target];
+    }
     for (const k of [host, stripped, 'www.' + stripped]) if (stores[k]) return stores[k];
     // Walk parent domains (e.g. ch.iherb.com -> iherb.com), but never to a TLD.
     const parts = stripped.split('.');
@@ -95,18 +121,6 @@
     return params.some(p => qs.includes(p));
   }
 
-  function isLoggedIn() {
-    return new Promise(resolve => {
-      if (typeof GM_cookie === 'undefined' || !GM_cookie || !GM_cookie.list) { resolve(null); return; }
-      try {
-        GM_cookie.list({ url: APP, name: 'cry_user_token' }, (cookies, err) => {
-          if (err || !cookies || !cookies.length) return resolve(false);
-          resolve(Boolean(cookies[0].value));
-        });
-      } catch (_) { resolve(null); }
-    });
-  }
-
   async function fetchCoupons(storeId) {
     const key = 'monerio_coupons_' + storeId;
     const raw = GM_getValue(key, null);
@@ -128,14 +142,7 @@
       .replace(/\s*mit\s*$|\s*with\s*$|\s*avec\s*$|\s*con\s*$/i, '');
   }
 
-  function cashbackWas(store) {
-    if (!store.cashback_was) return '';
-    const [type, val] = String(store.cashback_was).split('|');
-    if (!val) return '';
-    return type === 'percent' ? `${val}%` : `CHF ${val}`;
-  }
-
-  function outUrl(store) { return `${APP}/${LANG}/out/store/${store.id}`; }
+  function outUrl(store) { return `${APP}/out/store/${store.id}`; }
 
   function injectStyles() {
     if (document.getElementById('mn-style')) return;
@@ -149,15 +156,11 @@
       .mn-title { font-weight:600; font-size:14px; }
       .mn-sub { color:#6b7280; font-size:11px; }
       .mn-cb { color:#0a7d2c; font-weight:700; margin:8px 0 10px; font-size:14px; }
-      .mn-was { color:#9ca3af; text-decoration:line-through; font-weight:500; margin-left:6px; font-size:12px; }
       .mn-btn { display:block; text-align:center; padding:9px 12px; background:#111; color:#fff !important;
         text-decoration:none; border-radius:8px; font-weight:600; }
       .mn-btn:hover { background:#000; }
       .mn-note { margin-top:8px; padding:6px 8px; border-radius:6px; font-size:11px;
         background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; }
-      .mn-warn { margin-top:8px; padding:6px 8px; border-radius:6px; font-size:11px;
-        background:#fffbeb; color:#92400e; border:1px solid #fde68a; }
-      .mn-warn a { color:#92400e; font-weight:600; }
       .mn-x { position:absolute; top:6px; right:8px; cursor:pointer; opacity:.5;
         background:none; border:0; font-size:18px; line-height:1; padding:2px 6px; }
       .mn-x:hover { opacity:1; }
@@ -183,7 +186,6 @@
   function render(store, coupons, opts) {
     injectStyles();
     document.querySelectorAll('.mn-banner').forEach(b => b.remove());
-    const was = cashbackWas(store);
     const el = document.createElement('div');
     el.className = 'mn-banner';
     el.innerHTML = `
@@ -195,16 +197,10 @@
           <div class="mn-sub">Monerio cashback available</div>
         </div>
       </div>
-      <div class="mn-cb">
-        ${escapeHtml(cashbackText(store))}
-        ${was ? `<span class="mn-was" title="Previous rate">was ${escapeHtml(was)}</span>` : ''}
-      </div>
+      <div class="mn-cb">${escapeHtml(cashbackText(store))}</div>
       ${opts.alreadyActivated
         ? `<div class="mn-note">✓ Already on an affiliate link &mdash; cashback should track.</div>`
         : `<a class="mn-btn" href="${outUrl(store)}" target="_blank" rel="noopener">Activate cashback</a>`}
-      ${opts.loggedIn === false
-        ? `<div class="mn-warn">Sign in on <a href="${APP}" target="_blank" rel="noopener">monerio.ch</a> first &mdash; cashback only tracks for logged-in users.</div>`
-        : ''}
       ${coupons.length ? `<button class="mn-toggle">Show ${coupons.length} coupon${coupons.length > 1 ? 's' : ''}</button>` : ''}
       <div class="mn-cp"></div>
     `;
@@ -268,12 +264,11 @@
       }
       const hiddenAt = Number(GM_getValue('mn_hide_' + store.id, 0));
       if (hiddenAt && Date.now() - hiddenAt < HIDE_TTL_MS) return;
-      const [coupons, alreadyActivated, loggedIn] = await Promise.all([
+      const [coupons, alreadyActivated] = await Promise.all([
         fetchCoupons(store.id).catch(() => []),
         hasAffParams().catch(() => false),
-        isLoggedIn(),
       ]);
-      render(store, coupons, { alreadyActivated, loggedIn });
+      render(store, coupons, { alreadyActivated });
     } catch (e) {
       console.warn('[Monerio]', e);
     }
