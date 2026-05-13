@@ -4,6 +4,9 @@
 // @version      0.1.3
 // @description  Shows Monerio, Rabattcorner, and iGraal cashback on supported stores, with one-click affiliate activation links and coupon codes. Highlights the best offer when multiple providers cover the same shop.
 // @author       Michele Spagnuolo (miki.it)
+// @license      MIT
+// @homepageURL  https://github.com/mikispag/userscripts/
+// @supportURL   https://github.com/mikispag/userscripts/issues
 // @match        https://*/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
