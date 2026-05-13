@@ -2,7 +2,7 @@
 // @name            Amazon CamelCamelCamel + Keepa Price Charts
 // @version         2.0.0
 // @description     Add CamelCamelCamel and Keepa price charts to Amazon product pages.
-// @author          miki.it
+// @author          Michele Spagnuolo (miki.it)
 // @namespace       https://github.com/mikispag/userscripts/
 // @homepage        https://github.com/mikispag/userscripts/
 // @match           https://www.amazon.com/*

@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Monerio + Rabattcorner + iGraal Cashback
-// @namespace    https://monerio.ch/
+// @namespace    https://github.com/mikispag/userscripts/
 // @version      0.1.2
 // @description  Shows Monerio, Rabattcorner, and iGraal cashback on supported stores, with one-click affiliate activation links and coupon codes. Highlights the best offer when multiple providers cover the same shop.
-// @author       miki.it
+// @author       Michele Spagnuolo (miki.it)
 // @match        https://*/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
