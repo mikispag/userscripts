@@ -30,6 +30,7 @@ are cached locally (TTLs from hours to days) to minimize requests.
 
 **Install:**
 
+- [Greasy Fork](https://greasyfork.org/en/scripts/578001-monerio-rabattcorner-igraal-cashback) (recommended — automatic updates)
 - [Directly from this repository](https://github.com/mikispag/userscripts/raw/main/monerio-rabattcorner-igraal/monerio-rabattcorner-igraal-cashback.user.js)
 
 > **Privacy note:** like the official iGraal browser extension, this script
