@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monerio + Rabattcorner + iGraal Cashback
 // @namespace    https://github.com/mikispag/userscripts/
-// @version      0.1.4
+// @version      0.1.5
 // @description  Shows Monerio, Rabattcorner, and iGraal cashback on supported stores, with one-click affiliate activation links and coupon codes. Highlights the best offer when multiple providers cover the same shop.
 // @author       Michele Spagnuolo (miki.it)
 // @license      MIT
@@ -39,6 +39,11 @@
   // never changes; catalog growth is slow (~tens of retailers/month). Use long TTLs.
   const IG_MATCH_POS_TTL_MS = 14 * 24 * 60 * 60 * 1000;   // 14 days for known retailers
   const IG_MATCH_NEG_TTL_MS = 30 * 24 * 60 * 60 * 1000;   // 30 days for hosts not on iGraal
+  // Assumed basket size (CHF) used when ranking a percentage offer against a
+  // fixed-amount offer. iGraal fixed amounts are EUR/PLN but are treated as
+  // CHF for this comparison (EUR≈CHF for the FR/DE locales used in CH); the
+  // badge surfaces the assumption to the user.
+  const BASKET_CHF = 50;
 
   const MN = { id: 'monerio',      label: 'Monerio',      color: '#0a7d2c' };
   const RC = { id: 'rabattcorner', label: 'Rabattcorner', color: '#e6007e' };
@@ -508,19 +513,24 @@
   }
 
   // ====== Best-offer picking ======
-  // Returns the single match object with the strictly-highest rate across all
-  // provided matches. Returns null when:
+  // Returns { match, basket } for the single match with the strictly-highest
+  // rate, where basket is the CHF basket size assumed for the comparison (only
+  // set when percent and fixed offers were mixed). Returns null when:
   //   - Fewer than 2 rated matches (nothing to compare).
-  //   - Rate units mismatch (percent vs CHF — incomparable without basket size).
-  //   - Multiple matches share the top value (a tie — show all without a "Best" badge).
+  //   - Multiple matches tie at the top value (no "Best" badge shown).
   function pickBestMatch(matches) {
     const rated = matches.filter(m => m.rate);
     if (rated.length < 2) return null;
     const kinds = new Set(rated.map(m => m.rate.kind));
-    if (kinds.size > 1) return null;
-    const maxV = Math.max(...rated.map(m => m.rate.value));
-    const top = rated.filter(m => m.rate.value === maxV);
-    return top.length === 1 ? top[0] : null;
+    const mixed = kinds.size > 1;
+    const valueOf = mixed
+      ? (r => r.kind === 'percent' ? r.value * BASKET_CHF / 100 : r.value)
+      : (r => r.value);
+    const scored = rated.map(m => ({ m, v: valueOf(m.rate) }));
+    const maxV = Math.max(...scored.map(s => s.v));
+    const top = scored.filter(s => s.v === maxV);
+    if (top.length !== 1) return null;
+    return { match: top[0].m, basket: mixed ? BASKET_CHF : null };
   }
 
   // ====== Rendering ======
@@ -603,7 +613,7 @@
       <button class="mn-x" title="Hide for today" aria-label="Close">×</button>
       <div class="mn-chips">
         <span class="mn-chip" style="background:${spec.provider.color}">${escapeHtml(spec.provider.label)}</span>
-        ${spec.isBest ? `<span class="mn-chip mn-best-chip" title="Highest cashback among matching providers">★ Best deal</span>` : ''}
+        ${spec.isBest ? `<span class="mn-chip mn-best-chip" title="${spec.bestBasketChf ? `Highest cashback assuming a basket above CHF ${spec.bestBasketChf}` : 'Highest cashback among matching providers'}">★ Best deal${spec.bestBasketChf ? ` &gt; CHF ${spec.bestBasketChf}` : ''}</span>` : ''}
       </div>
       <div class="mn-row">
         ${logo ? `<img class="mn-logo" src="${escapeAttr(logo)}" alt="">` : ''}
@@ -818,8 +828,12 @@
     const matches = results.filter(r => r.kind === 'match');
     const errors  = results.filter(r => r.kind === 'error');
 
-    const best = pickBestMatch(matches);
-    for (const m of matches) m.spec.isBest = (m === best);
+    const pick = pickBestMatch(matches);
+    const best = pick ? pick.match : null;
+    for (const m of matches) {
+      m.spec.isBest = (m === best);
+      m.spec.bestBasketChf = (m === best) ? pick.basket : null;
+    }
 
     // Order: best first; other matches in stable provider order; errors last.
     const order = [];
